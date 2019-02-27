@@ -67,7 +67,8 @@ func (e Op) String() string {
 // directory and the type of event that's occurred and the full path of the file.
 type Event struct {
 	Op
-	Path string
+	Path    string
+	OldPath string
 	os.FileInfo
 }
 
@@ -82,7 +83,13 @@ func (e Event) String() string {
 	if e.IsDir() {
 		pathType = "DIRECTORY"
 	}
-	return fmt.Sprintf("%s %q %s [%s]", pathType, e.Name(), e.Op, e.Path)
+
+	path := e.Path
+	if e.Op == Move || e.Op == Rename {
+		path = fmt.Sprintf("%s -> %s", e.OldPath, e.Path)
+	}
+
+	return fmt.Sprintf("%s %q %s [%s]", pathType, e.Name(), e.Op, path)
 }
 
 // FilterFileHookFunc is a function that is called to filter files during listings.
@@ -636,14 +643,14 @@ func (w *Watcher) pollEvents(files map[string]os.FileInfo, evt chan Event,
 			select {
 			case <-cancel:
 				return
-			case evt <- Event{Write, path, info}:
+			case evt <- Event{Write, path, "", info}:
 			}
 		}
 		if oldInfo.Mode() != info.Mode() {
 			select {
 			case <-cancel:
 				return
-			case evt <- Event{Chmod, path, info}:
+			case evt <- Event{Chmod, path, "", info}:
 			}
 		}
 	}
@@ -654,7 +661,8 @@ func (w *Watcher) pollEvents(files map[string]os.FileInfo, evt chan Event,
 			if sameFile(info1, info2) {
 				e := Event{
 					Op:       Move,
-					Path:     fmt.Sprintf("%s -> %s", path1, path2),
+					Path:     path2,
+					OldPath:  path1,
 					FileInfo: info1,
 				}
 				// If they are from the same directory, it's a rename
@@ -680,14 +688,14 @@ func (w *Watcher) pollEvents(files map[string]os.FileInfo, evt chan Event,
 		select {
 		case <-cancel:
 			return
-		case evt <- Event{Create, path, info}:
+		case evt <- Event{Create, path, "", info}:
 		}
 	}
 	for path, info := range removes {
 		select {
 		case <-cancel:
 			return
-		case evt <- Event{Remove, path, info}:
+		case evt <- Event{Remove, path, "", info}:
 		}
 	}
 }

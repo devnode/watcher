@@ -68,24 +68,37 @@ func TestEventString(t *testing.T) {
 	e := &Event{Op: Create, Path: "/fake/path"}
 
 	testCases := []struct {
+		event    *Event
 		info     os.FileInfo
 		expected string
 	}{
-		{nil, "???"},
+		{e, nil, "???"},
 		{
+			e,
 			&fileInfo{name: "f1", dir: true},
 			"DIRECTORY \"f1\" CREATE [/fake/path]",
 		},
 		{
+			e,
 			&fileInfo{name: "f2", dir: false},
 			"FILE \"f2\" CREATE [/fake/path]",
+		},
+		{
+			&Event{Op: Move, Path: "/fake/dst", OldPath: "/fake/src"},
+			&fileInfo{name: "dst", dir: false},
+			"FILE \"dst\" MOVE [/fake/src -> /fake/dst]",
+		},
+		{
+			&Event{Op: Rename, Path: "/fake/dst", OldPath: "/fake/src"},
+			&fileInfo{name: "dst", dir: false},
+			"FILE \"dst\" RENAME [/fake/src -> /fake/dst]",
 		},
 	}
 
 	for _, tc := range testCases {
-		e.FileInfo = tc.info
-		if e.String() != tc.expected {
-			t.Errorf("expected e.String() to be %s, got %s", tc.expected, e.String())
+		tc.event.FileInfo = tc.info
+		if tc.event.String() != tc.expected {
+			t.Errorf("expected e.String() to be %q, got %q", tc.expected, tc.event.String())
 		}
 	}
 }
@@ -674,6 +687,60 @@ func TestEventDeleteFile(t *testing.T) {
 	wg.Wait()
 }
 
+func TestEventMoveFile(t *testing.T) {
+	testDir, teardown := setup(t)
+	defer teardown()
+
+	w := New()
+	w.FilterOps(Move)
+
+	// Add the testDir to the watchlist.
+	if err := w.AddRecursive(testDir); err != nil {
+		t.Fatal(err)
+	}
+
+	src := filepath.Join(testDir, "file.txt")
+	dst := filepath.Join(testDir, "testDirTwo", "file1.txt")
+
+	// Rename a file.
+	if err := os.Rename(src, dst); err != nil {
+		t.Error(err)
+	}
+
+	var wg sync.WaitGroup
+	wg.Add(1)
+
+	go func() {
+		defer wg.Done()
+
+		select {
+		case event := <-w.Event:
+			if event.Op != Move {
+				t.Errorf("expected event to be Move, got %s", event.Op)
+			}
+
+			if event.Path != dst {
+				t.Errorf("expected event.Path to be %q, got %q", dst, event.Path)
+			}
+
+			if event.OldPath != src {
+				t.Errorf("expected event.OldPath to be %q, got %q", src, event.OldPath)
+			}
+		case <-time.After(time.Millisecond * 250):
+			t.Fatal("received no move event")
+		}
+	}()
+
+	go func() {
+		// Start the watching process.
+		if err := w.Start(time.Millisecond * 100); err != nil {
+			t.Fatal(err)
+		}
+	}()
+
+	wg.Wait()
+}
+
 func TestEventRenameFile(t *testing.T) {
 	testDir, teardown := setup(t)
 	defer teardown()
@@ -686,11 +753,11 @@ func TestEventRenameFile(t *testing.T) {
 		t.Fatal(err)
 	}
 
+	src := filepath.Join(testDir, "file.txt")
+	dst := filepath.Join(testDir, "file1.txt")
+
 	// Rename a file.
-	if err := os.Rename(
-		filepath.Join(testDir, "file.txt"),
-		filepath.Join(testDir, "file1.txt"),
-	); err != nil {
+	if err := os.Rename(src, dst); err != nil {
 		t.Error(err)
 	}
 
@@ -704,6 +771,14 @@ func TestEventRenameFile(t *testing.T) {
 		case event := <-w.Event:
 			if event.Op != Rename {
 				t.Errorf("expected event to be Rename, got %s", event.Op)
+			}
+
+			if event.Path != dst {
+				t.Errorf("expected event.Path to be %q, got %q", dst, event.Path)
+			}
+
+			if event.OldPath != src {
+				t.Errorf("expected event.OldPath to be %q, got %q", src, event.OldPath)
 			}
 		case <-time.After(time.Millisecond * 250):
 			t.Fatal("received no rename event")
